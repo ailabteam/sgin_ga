@@ -1,4 +1,6 @@
-# train_advanced_ai.py (v1.2 - Sửa lỗi Clifford IndexError)
+# train_final_comparison.py
+# Phiên bản thực nghiệm cuối cùng, so sánh Vector, GA, và Hybrid features trên mô hình LSTM
+# cho bài toán dự đoán dài hạn (5 phút).
 
 import numpy as np
 import torch
@@ -13,6 +15,7 @@ import warnings
 from numba.core.errors import NumbaDeprecationWarning
 warnings.simplefilter('ignore', category=NumbaDeprecationWarning)
 import pandas as pd
+import time
 
 # ===================================================================
 # 1. ĐỊNH NGHĨA CÁC KIẾN TRÚC AI
@@ -33,8 +36,11 @@ class LSTM_Predictor(nn.Module):
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, dropout=0.2)
         self.fc = nn.Linear(hidden_size, 1)
         self.sigmoid = nn.Sigmoid()
+
     def forward(self, x):
+        # x shape: (batch_size, seq_length, input_size)
         out, _ = self.lstm(x)
+        # Lấy output của bước thời gian cuối cùng
         out = self.fc(out[:, -1, :])
         return self.sigmoid(out)
 
@@ -59,24 +65,22 @@ def process_single_constellation(states, connectivity, feature_type='vector', se
     feature_dim = 12
     feature_tensor = np.zeros((num_steps, num_sats, num_sats, feature_dim))
 
-    if feature_type == 'vector':
+    # Khởi tạo GA một lần để tái sử dụng
+    layout_g3, blades_g3 = clifford.Cl(3)
+    e1, e2, e3 = blades_g3['e1'], blades_g3['e2'], blades_g3['e3']
+
+    # Lặp qua từng bước thời gian để tính toán
+    for t in range(num_steps):
         for j in range(num_sats):
             for k in range(j + 1, num_sats):
-                feature = np.concatenate([state_tensor[:, j, :], state_tensor[:, k, :]], axis=1)
-                feature_tensor[:, j, k, :] = feature
-                feature_tensor[:, k, j, :] = np.concatenate([state_tensor[:, k, :], state_tensor[:, j, :]], axis=1)
-    
-    elif feature_type == 'ga':
-        layout_g3, blades_g3 = clifford.Cl(3)
-        e1, e2, e3 = blades_g3['e1'], blades_g3['e2'], blades_g3['e3']
-        
-        # SỬA LỖI: Lặp qua từng bước thời gian để tránh lỗi indexing
-        for t in range(num_steps):
-            for j in range(num_sats):
-                for k in range(j + 1, num_sats):
-                    state_j_np = state_tensor[t, j, :]
-                    state_k_np = state_tensor[t, k, :]
-                    
+                state_j_np = state_tensor[t, j, :]
+                state_k_np = state_tensor[t, k, :]
+                
+                if feature_type == 'vector':
+                    feature = np.concatenate([state_j_np, state_k_np])
+                    feature_kj = np.concatenate([state_k_np, state_j_np])
+
+                elif feature_type in ['ga', 'hybrid']:
                     pos_j_np, vel_j_np = state_j_np[:3], state_j_np[3:]
                     pos_k_np, vel_k_np = state_k_np[:3], state_k_np[3:]
                     
@@ -87,18 +91,27 @@ def process_single_constellation(states, connectivity, feature_type='vector', se
 
                     bivector_j = pos_j_ga ^ vel_j_ga
                     bivector_k = pos_k_ga ^ vel_k_ga
-                    relative_pos = pos_j_ga - pos_k_ga
-                    relative_vel = vel_j_ga - vel_k_ga
                     
                     b_j_coeffs = np.array([bivector_j[e1^e2], bivector_j[e1^e3], bivector_j[e2^e3]])
                     b_k_coeffs = np.array([bivector_k[e1^e2], bivector_k[e1^e3], bivector_k[e2^e3]])
-                    rel_pos_coeffs = np.array([relative_pos[e1], relative_pos[e2], relative_pos[e3]])
-                    rel_vel_coeffs = np.array([relative_vel[e1], relative_vel[e2], relative_vel[e3]])
                     
-                    feature = np.concatenate([b_j_coeffs, b_k_coeffs, rel_pos_coeffs, rel_vel_coeffs])
-                    feature_tensor[t, j, k, :] = feature
-                    feature_kj = np.concatenate([b_k_coeffs, b_j_coeffs, -rel_pos_coeffs, -rel_vel_coeffs])
-                    feature_tensor[t, k, j, :] = feature_kj
+                    relative_pos_ga = pos_j_ga - pos_k_ga
+                    relative_vel_ga = vel_j_ga - vel_k_ga
+                    rel_pos_coeffs = np.array([relative_pos_ga[e1], relative_pos_ga[e2], relative_pos_ga[e3]])
+                    rel_vel_coeffs = np.array([relative_vel_ga[e1], relative_vel_ga[e2], relative_vel_ga[e3]])
+
+                    if feature_type == 'ga':
+                        feature = np.concatenate([b_j_coeffs, b_k_coeffs, rel_pos_coeffs, rel_vel_coeffs])
+                        feature_kj = np.concatenate([b_k_coeffs, b_j_coeffs, -rel_pos_coeffs, -rel_vel_coeffs])
+                    elif feature_type == 'hybrid':
+                        # Vector tương đối trực tiếp từ numpy
+                        rel_pos_np = pos_j_np - pos_k_np
+                        rel_vel_np = vel_j_np - vel_k_np
+                        feature = np.concatenate([b_j_coeffs, b_k_coeffs, rel_pos_np, rel_vel_np])
+                        feature_kj = np.concatenate([b_k_coeffs, b_j_coeffs, -rel_pos_np, -rel_vel_np])
+                
+                feature_tensor[t, j, k, :] = feature
+                feature_tensor[t, k, j, :] = feature_kj
 
     X_list, y_list = [], []
     for i in range(num_steps - sequence_length - prediction_horizon + 1):
@@ -110,16 +123,16 @@ def process_single_constellation(states, connectivity, feature_type='vector', se
                 y_list.append(connectivity[label_idx, j, k])
     return X_list, y_list
 
-def prepare_combined_data(constellations, feature_type, sequence_length=5):
+def prepare_combined_data(constellations, feature_type, sequence_length=5, prediction_horizon=1):
     print(f"\n--- Chuẩn bị dữ liệu kết hợp với features '{feature_type}' ---")
     all_X, all_y = [], []
     for group in constellations:
         try:
             print(f"Đang xử lý {group}...")
-            data = np.load(f'sim_data_{group}.npz')
+            data = np.load(f'sim_data_{group}.npz', allow_pickle=True)
             states = data['states']; connectivity = data['connectivity']
             states[:, 0] = states[:, 0] - states[0, 0]
-            X_list, y_list = process_single_constellation(states, connectivity, feature_type, sequence_length)
+            X_list, y_list = process_single_constellation(states, connectivity, feature_type, sequence_length, prediction_horizon)
             all_X.extend(X_list); all_y.extend(y_list)
         except FileNotFoundError:
             print(f"Cảnh báo: Không tìm thấy file sim_data_{group}.npz")
@@ -131,6 +144,7 @@ def prepare_combined_data(constellations, feature_type, sequence_length=5):
 
 def train_and_evaluate(model, X_train, y_train, X_test, y_test, model_name):
     print(f"\n--- Bắt đầu Huấn luyện: {model_name} ---")
+    start_time = time.time()
     scaler = StandardScaler()
     X_train_shape = X_train.shape; X_train_2d = X_train.reshape(-1, X_train_shape[-1])
     scaler.fit(X_train_2d); X_train_scaled_2d = scaler.transform(X_train_2d)
@@ -141,10 +155,12 @@ def train_and_evaluate(model, X_train, y_train, X_test, y_test, model_name):
     if isinstance(model, MLP_Predictor):
         X_train = X_train.reshape(X_train.shape[0], -1)
         X_test = X_test.reshape(X_test.shape[0], -1)
+    
     X_train_tensor = torch.from_numpy(X_train); y_train_tensor = torch.from_numpy(y_train)
     X_test_tensor = torch.from_numpy(X_test); y_test_tensor = torch.from_numpy(y_test)
     train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
     train_loader = DataLoader(dataset=train_dataset, batch_size=512, shuffle=True)
+    
     num_neg = np.sum(y_train == 0); num_pos = np.sum(y_train == 1)
     pos_weight = torch.tensor([num_neg / num_pos], dtype=torch.float32)
     criterion = nn.BCELoss(weight=pos_weight)
@@ -156,24 +172,36 @@ def train_and_evaluate(model, X_train, y_train, X_test, y_test, model_name):
             loss = criterion(outputs, labels)
             optimizer.zero_grad(); loss.backward(); optimizer.step()
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+    
+    end_time = time.time()
+    training_time = end_time - start_time
+
     with torch.no_grad():
         y_predicted = model(X_test_tensor)
         y_predicted_cls = y_predicted.round()
         f1 = f1_score(y_test_tensor, y_predicted_cls)
         auc = roc_auc_score(y_test_tensor, y_predicted)
-        return {'F1 Score': f1, 'AUC-ROC': auc}
+        return {'F1 Score': f1, 'AUC-ROC': auc, 'Training Time (s)': training_time}
 
 def main():
     constellations = ['iridium', 'starlink', 'oneweb']
-    X_vec, y_vec = prepare_combined_data(constellations, feature_type='vector')
-    X_ga, y_ga = prepare_combined_data(constellations, feature_type='ga')
+    horizon_steps = 5 # Dự đoán dài hạn 5 phút
+    seq_len = 5
+    
+    X_vec, y_vec = prepare_combined_data(constellations, 'vector', seq_len, horizon_steps)
+    X_ga, y_ga = prepare_combined_data(constellations, 'ga', seq_len, horizon_steps)
+    X_hyb, y_hyb = prepare_combined_data(constellations, 'hybrid', seq_len, horizon_steps)
+    
     X_vec_train, X_vec_test, y_train, y_test = train_test_split(X_vec, y_vec, test_size=0.3, random_state=42, stratify=y_vec)
     X_ga_train, X_ga_test, _, _ = train_test_split(X_ga, y_ga, test_size=0.3, random_state=42, stratify=y_ga)
+    X_hyb_train, X_hyb_test, _, _ = train_test_split(X_hyb, y_hyb, test_size=0.3, random_state=42, stratify=y_hyb)
+
     results = []
-    seq_len, feat_dim = X_vec.shape[1], X_vec.shape[2]
+    feat_dim = X_vec.shape[2]
     
+    # Thêm MLP để so sánh
     model_mlp = MLP_Predictor(input_size=seq_len * feat_dim)
-    res_mlp = train_and_evaluate(model_mlp, X_vec_train, y_train, X_vec_test, y_test, "MLP Baseline (Vector)")
+    res_mlp = train_and_evaluate(model_mlp, X_vec_train, y_train, X_vec_test, y_test, "MLP (Vector)")
     results.append({'Model': 'MLP', 'Features': 'Vector', **res_mlp})
 
     model_lstm_vec = LSTM_Predictor(input_size=feat_dim)
@@ -184,7 +212,11 @@ def main():
     res_lstm_ga = train_and_evaluate(model_lstm_ga, X_ga_train, y_train, X_ga_test, y_test, "LSTM (GA)")
     results.append({'Model': 'LSTM', 'Features': 'GA', **res_lstm_ga})
     
-    print("\n\n--- BẢNG KẾT QUẢ SO SÁNH CUỐI CÙNG ---")
+    model_lstm_hyb = LSTM_Predictor(input_size=feat_dim)
+    res_lstm_hyb = train_and_evaluate(model_lstm_hyb, X_hyb_train, y_train, X_hyb_test, y_test, "LSTM (Hybrid)")
+    results.append({'Model': 'LSTM', 'Features': 'Hybrid', **res_lstm_hyb})
+    
+    print("\n\n--- BẢNG KẾT QUẢ SO SÁNH CUỐI CÙNG (DỰ ĐOÁN 5 PHÚT) ---")
     df = pd.DataFrame(results)
     print(df.to_string(index=False))
 

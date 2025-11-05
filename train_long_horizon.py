@@ -41,15 +41,15 @@ class LSTM_Predictor(nn.Module):
 # ===================================================================
 # 2. CÁC HÀM CHUẨN BỊ DỮ LIỆU
 # ===================================================================
-def process_single_constellation(states, connectivity, feature_type='vector', sequence_length=5, prediction_horizon=1):
+def process_single_constellation(states, connectivity, feature_type='vector', sequence_length=5, prediction_horizon=5):
     num_steps, num_sats, _ = connectivity.shape
     unique_sat_ids = np.unique(states[:, 1])
     sat_id_to_idx = {int(sat_id): i for i, sat_id in enumerate(unique_sat_ids)}
-    
+
     if num_sats != len(unique_sat_ids):
         print(f"  - Cảnh báo: Số vệ tinh không khớp. Connectivity: {num_sats}, States: {len(unique_sat_ids)}. Bỏ qua chòm này.")
         return [], []
-        
+
     state_tensor = np.zeros((num_steps, num_sats, 6))
     for row in states:
         step, sat_id, pos_x, pos_y, pos_z, vel_x, vel_y, vel_z = row
@@ -65,21 +65,21 @@ def process_single_constellation(states, connectivity, feature_type='vector', se
                 feature = np.concatenate([state_tensor[:, j, :], state_tensor[:, k, :]], axis=1)
                 feature_tensor[:, j, k, :] = feature
                 feature_tensor[:, k, j, :] = np.concatenate([state_tensor[:, k, :], state_tensor[:, j, :]], axis=1)
-    
+
     elif feature_type == 'ga':
         layout_g3, blades_g3 = clifford.Cl(3)
         e1, e2, e3 = blades_g3['e1'], blades_g3['e2'], blades_g3['e3']
-        
+
         # SỬA LỖI: Lặp qua từng bước thời gian để tránh lỗi indexing
         for t in range(num_steps):
             for j in range(num_sats):
                 for k in range(j + 1, num_sats):
                     state_j_np = state_tensor[t, j, :]
                     state_k_np = state_tensor[t, k, :]
-                    
+
                     pos_j_np, vel_j_np = state_j_np[:3], state_j_np[3:]
                     pos_k_np, vel_k_np = state_k_np[:3], state_k_np[3:]
-                    
+
                     pos_j_ga = pos_j_np[0]*e1 + pos_j_np[1]*e2 + pos_j_np[2]*e3
                     vel_j_ga = vel_j_np[0]*e1 + vel_j_np[1]*e2 + vel_j_np[2]*e3
                     pos_k_ga = pos_k_np[0]*e1 + pos_k_np[1]*e2 + pos_k_np[2]*e3
@@ -89,12 +89,12 @@ def process_single_constellation(states, connectivity, feature_type='vector', se
                     bivector_k = pos_k_ga ^ vel_k_ga
                     relative_pos = pos_j_ga - pos_k_ga
                     relative_vel = vel_j_ga - vel_k_ga
-                    
+
                     b_j_coeffs = np.array([bivector_j[e1^e2], bivector_j[e1^e3], bivector_j[e2^e3]])
                     b_k_coeffs = np.array([bivector_k[e1^e2], bivector_k[e1^e3], bivector_k[e2^e3]])
                     rel_pos_coeffs = np.array([relative_pos[e1], relative_pos[e2], relative_pos[e3]])
                     rel_vel_coeffs = np.array([relative_vel[e1], relative_vel[e2], relative_vel[e3]])
-                    
+
                     feature = np.concatenate([b_j_coeffs, b_k_coeffs, rel_pos_coeffs, rel_vel_coeffs])
                     feature_tensor[t, j, k, :] = feature
                     feature_kj = np.concatenate([b_k_coeffs, b_j_coeffs, -rel_pos_coeffs, -rel_vel_coeffs])
@@ -123,7 +123,7 @@ def prepare_combined_data(constellations, feature_type, sequence_length=5):
             all_X.extend(X_list); all_y.extend(y_list)
         except FileNotFoundError:
             print(f"Cảnh báo: Không tìm thấy file sim_data_{group}.npz")
-    
+
     X = np.array(all_X, dtype=np.float32)
     y = np.array(all_y, dtype=np.float32).reshape(-1, 1)
     print(f"Đã tạo {len(X)} mẫu chuỗi tổng hợp. Shape X: {X.shape}, Shape y: {y.shape}")
@@ -171,7 +171,7 @@ def main():
     X_ga_train, X_ga_test, _, _ = train_test_split(X_ga, y_ga, test_size=0.3, random_state=42, stratify=y_ga)
     results = []
     seq_len, feat_dim = X_vec.shape[1], X_vec.shape[2]
-    
+
     model_mlp = MLP_Predictor(input_size=seq_len * feat_dim)
     res_mlp = train_and_evaluate(model_mlp, X_vec_train, y_train, X_vec_test, y_test, "MLP Baseline (Vector)")
     results.append({'Model': 'MLP', 'Features': 'Vector', **res_mlp})
@@ -179,14 +179,15 @@ def main():
     model_lstm_vec = LSTM_Predictor(input_size=feat_dim)
     res_lstm_vec = train_and_evaluate(model_lstm_vec, X_vec_train, y_train, X_vec_test, y_test, "LSTM (Vector)")
     results.append({'Model': 'LSTM', 'Features': 'Vector', **res_lstm_vec})
-    
+
     model_lstm_ga = LSTM_Predictor(input_size=feat_dim)
     res_lstm_ga = train_and_evaluate(model_lstm_ga, X_ga_train, y_train, X_ga_test, y_test, "LSTM (GA)")
     results.append({'Model': 'LSTM', 'Features': 'GA', **res_lstm_ga})
-    
+
     print("\n\n--- BẢNG KẾT QUẢ SO SÁNH CUỐI CÙNG ---")
     df = pd.DataFrame(results)
     print(df.to_string(index=False))
 
 if __name__ == '__main__':
     main()
+
