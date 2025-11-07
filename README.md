@@ -6,7 +6,7 @@ Our research introduces a novel framework that leverages Geometric Algebra (GA) 
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-![t-SNE Visualization](paper_figures/figure_3_tsne_feature_space.pdf)
+![t-SNE Visualization](paper_figures/figure_3_tsne_feature_space.png)
 *Fig: t-SNE visualization demonstrating the superior class separability of Geometric Algebra features (b) compared to traditional vectors (a).*
 
 ## Key Contributions
