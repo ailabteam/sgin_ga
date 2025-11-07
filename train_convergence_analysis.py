@@ -1,86 +1,107 @@
-# train_convergence_analysis.py (v3.0 - Batch Mode)
+# train_convergence_analysis.py (v2.0 - Data Export Only)
+# Mục đích: Chạy thực nghiệm so sánh chính và lưu kết quả ra file CSV.
+# File này không còn vẽ biểu đồ nữa.
 
 import numpy as np
 import torch
 import pandas as pd
 import os
 import time
-import argparse  # Dùng để nhận tham số dòng lệnh
 from sklearn.model_selection import train_test_split
 
-# Import các công cụ từ utils.py, bao gồm hàm set_seed mới
+# Import các công cụ từ utils.py
 from utils import (
-    set_seed,
     MLP_Predictor,
     LSTM_Predictor,
     prepare_combined_data,
-    train_and_evaluate_convergence
+    train_and_evaluate_convergence,
+    set_seed
 )
 
 def main():
-    # --- Thiết lập Parser để nhận tham số ---
-    parser = argparse.ArgumentParser(description="Chạy thực nghiệm hội tụ với một random seed cụ thể.")
-    parser.add_argument('--seed', type=int, default=42, help="Random seed cho lần chạy.")
-    args = parser.parse_args()
+    # Sử dụng một seed cố định để đảm bảo kết quả chính có thể tái lặp
+    set_seed(42)
 
-    # Thiết lập seed cho toàn bộ quá trình
-    set_seed(args.seed)
-    print(f"===== RUNNING EXPERIMENT WITH SEED: {args.seed} =====")
-    
     # Tạo thư mục lưu kết quả nếu chưa có
-    output_dir = 'results_multiple_runs'
+    output_dir = 'results'
     os.makedirs(output_dir, exist_ok=True)
     
-    # --- Các thiết lập thực nghiệm (không đổi) ---
-    constellations = ['iridium', 'starlink', 'oneweb']
-    horizon_steps = 5; seq_len = 5; NUM_EPOCHS = 30
+    start_total_time = time.time()
     
-    # --- Chuẩn bị Dữ liệu ---
-    # (Lưu ý: prepare_data không bị ảnh hưởng bởi seed, nhưng split thì có)
+    # --- 1. Thiết lập Thực nghiệm ---
+    constellations = ['iridium', 'starlink', 'oneweb']
+    horizon_steps = 5
+    seq_len = 5
+    NUM_EPOCHS = 30
+    
+    # --- 2. Chuẩn bị Dữ liệu ---
     X_vec, y_vec = prepare_combined_data(constellations, 'vector', seq_len, horizon_steps)
     X_ga, y_ga = prepare_combined_data(constellations, 'ga', seq_len, horizon_steps)
     X_hyb, y_hyb = prepare_combined_data(constellations, 'hybrid', seq_len, horizon_steps)
     
-    # Chia dữ liệu với random_state là seed được truyền vào
-    X_vec_train, X_vec_test, y_train, y_test = train_test_split(X_vec, y_vec, test_size=0.3, random_state=args.seed, stratify=y_vec)
-    X_ga_train, X_ga_test, _, _ = train_test_split(X_ga, y_ga, test_size=0.3, random_state=args.seed, stratify=y_ga)
-    X_hyb_train, X_hyb_test, _, _ = train_test_split(X_hyb, y_hyb, test_size=0.3, random_state=args.seed, stratify=y_hyb)
+    # Chia dữ liệu
+    X_vec_train, X_vec_test, y_train, y_test = train_test_split(X_vec, y_vec, test_size=0.3, random_state=42, stratify=y_vec)
+    X_ga_train, X_ga_test, _, _ = train_test_split(X_ga, y_ga, test_size=0.3, random_state=42, stratify=y_ga)
+    X_hyb_train, X_hyb_test, _, _ = train_test_split(X_hyb, y_hyb, test_size=0.3, random_state=42, stratify=y_hyb)
 
-    # --- Chạy Thực nghiệm ---
+    # --- 3. Chạy Thực nghiệm ---
     results = []
+    all_histories = {}
     feat_dim = X_vec.shape[2]
     
-    # Chạy 4 mô hình như cũ
-    # MLP (Vector)
+    # Chạy MLP (Vector)
     model_mlp = MLP_Predictor(input_size=seq_len * feat_dim)
     res_mlp = train_and_evaluate_convergence(model_mlp, X_vec_train, y_train, X_vec_test, y_test, "MLP (Vector)", NUM_EPOCHS)
-    res_mlp.pop('History') # Không cần history cho lần chạy này
+    all_histories['MLP_Vector'] = res_mlp.pop('History')
     results.append({'Model': 'MLP', 'Features': 'Vector', **res_mlp})
 
-    # LSTM (Vector)
+    # Chạy LSTM (Vector)
     model_lstm_vec = LSTM_Predictor(input_size=feat_dim)
     res_lstm_vec = train_and_evaluate_convergence(model_lstm_vec, X_vec_train, y_train, X_vec_test, y_test, "LSTM (Vector)", NUM_EPOCHS)
-    res_lstm_vec.pop('History')
+    all_histories['LSTM_Vector'] = res_lstm_vec.pop('History')
     results.append({'Model': 'LSTM', 'Features': 'Vector', **res_lstm_vec})
     
-    # LSTM (GA)
+    # Chạy LSTM (GA)
     model_lstm_ga = LSTM_Predictor(input_size=feat_dim)
     res_lstm_ga = train_and_evaluate_convergence(model_lstm_ga, X_ga_train, y_train, X_ga_test, y_test, "LSTM (GA)", NUM_EPOCHS)
-    res_lstm_ga.pop('History')
+    all_histories['LSTM_GA'] = res_lstm_ga.pop('History')
     results.append({'Model': 'LSTM', 'Features': 'GA', **res_lstm_ga})
     
-    # LSTM (Hybrid)
+    # Chạy LSTM (Hybrid)
     model_lstm_hyb = LSTM_Predictor(input_size=feat_dim)
     res_lstm_hyb = train_and_evaluate_convergence(model_lstm_hyb, X_hyb_train, y_train, X_hyb_test, y_test, "LSTM (Hybrid)", NUM_EPOCHS)
-    res_lstm_hyb.pop('History')
+    all_histories['LSTM_Hybrid'] = res_lstm_hyb.pop('History')
     results.append({'Model': 'LSTM', 'Features': 'Hybrid', **res_lstm_hyb})
     
-    # --- Lưu kết quả của lần chạy này ---
+    # --- 4. Lưu Kết quả ra file ---
+
+    # a) Lưu bảng kết quả chính (dữ liệu cho Table 3)
     df_results = pd.DataFrame(results)
-    output_path = os.path.join(output_dir, f'results_seed_{args.seed}.csv')
-    df_results.to_csv(output_path, index=False)
+    main_results_path = os.path.join(output_dir, 'table_3_main_performance.csv')
+    df_results.to_csv(main_results_path, index=False, float_format='%.4f')
+    print(f"\nSaved main performance results (for Table 3) to '{main_results_path}'")
+    print("--- Main Performance Table ---")
+    print(df_results.to_string(index=False))
+
+    # b) Lưu lịch sử hội tụ (dữ liệu cho Figure 5)
+    history_dfs = []
+    for name, history in all_histories.items():
+        model, feature = name.split('_')
+        temp_df = pd.DataFrame({
+            'Epoch': range(1, NUM_EPOCHS + 1),
+            'Validation_F1': history['val_f1'],
+            'Model': model,
+            'Features': feature
+        })
+        history_dfs.append(temp_df)
     
-    print(f"\nResults for seed {args.seed} saved to '{output_path}'")
+    df_history = pd.concat(history_dfs, ignore_index=True)
+    convergence_data_path = os.path.join(output_dir, 'figure_5_convergence_data.csv')
+    df_history.to_csv(convergence_data_path, index=False, float_format='%.4f')
+    print(f"Saved convergence history (for Figure 5) to '{convergence_data_path}'")
+
+    end_total_time = time.time()
+    print(f"\nToàn bộ quá trình thực nghiệm hoàn tất sau {(end_total_time - start_total_time) / 60:.2f} phút.")
 
 if __name__ == '__main__':
     main()

@@ -1,6 +1,5 @@
 # generate_tsne_plot.py
-# Phiên bản v1.1: Sửa lỗi tham số 'n_iter' -> 'max_iter' và tối ưu hóa
-# để không phải chạy lại t-SNE.
+# Mục đích: Tạo Figure 4 - Trực quan hóa không gian đặc trưng bằng t-SNE.
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,102 +7,113 @@ from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
 import os
 import random
-import time
 
-# Import hàm chuẩn bị dữ liệu từ script chính của chúng ta
-try:
-    from train_final_comparison import prepare_combined_data
-except ImportError:
-    print("Lỗi: Không tìm thấy file 'train_final_comparison.py'.")
-    print("Hãy đảm bảo file này nằm trong cùng thư mục.")
-    exit()
+# Import các hàm chuẩn bị dữ liệu từ script huấn luyện
+# (Để tránh lặp lại code, chúng ta có thể import trực tiếp)
+from train_final_comparison import prepare_combined_data
 
-def create_tsne_data(X, y, n_samples=5000):
-    """
-    Hàm để chuẩn bị và chạy thuật toán t-SNE.
-    Trả về tọa độ 2D đã được tính toán.
-    """
-    print(f"Bắt đầu xử lý với {X.shape} mẫu.")
+def generate_tsne(X, y, title):
+    """Hàm để tính toán và vẽ t-SNE cho một bộ dữ liệu."""
+    print(f"--- Đang tạo t-SNE cho: {title} ---")
     
+    # t-SNE rất tốn tài nguyên, chúng ta sẽ lấy một mẫu con ngẫu nhiên
+    n_samples = 5000
     if len(X) > n_samples:
         print(f"Lấy mẫu con {n_samples} từ {len(X)} điểm dữ liệu...")
         indices = random.sample(range(len(X)), n_samples)
         X_sample = X[indices]
         y_sample = y[indices]
     else:
-        X_sample = X; y_sample = y
+        X_sample = X
+        y_sample = y
 
-    print("Đang chuẩn hóa dữ liệu...")
+    # Chuẩn hóa dữ liệu trước khi chạy t-SNE
     scaler = StandardScaler()
     X_sample_flat = X_sample.reshape(len(X_sample), -1)
     X_scaled = scaler.fit_transform(X_sample_flat)
     
-    print("Đang chạy thuật toán t-SNE... (việc này sẽ mất vài phút)")
-    tsne = TSNE(
-        n_components=2,
-        perplexity=40,
-        # SỬA LỖI: Đổi 'n_iter' thành 'max_iter'
-        max_iter=1000,
-        random_state=42,
-        verbose=1
-    )
-    start_time = time.time()
+    # Chạy t-SNE
+    print("Đang chạy TSNE... (việc này có thể mất vài phút)")
+    tsne = TSNE(n_components=2, perplexity=30, n_iter=1000, random_state=42, verbose=1)
     X_2d = tsne.fit_transform(X_scaled)
-    end_time = time.time()
-    print(f"t-SNE hoàn tất sau {end_time - start_time:.2f} giây.")
     
-    return X_2d, y_sample
+    # Tạo biểu đồ
+    fig, ax = plt.subplots(figsize=(8, 8))
+    
+    # Tách các điểm theo nhãn
+    points_0 = X_2d[y_sample.flatten() == 0]
+    points_1 = X_2d[y_sample.flatten() == 1]
+    
+    ax.scatter(points_0[:, 0], points_0[:, 1], c='cornflowerblue', label='No LoS (Class 0)', alpha=0.6, s=10)
+    ax.scatter(points_1[:, 0], points_1[:, 1], c='salmon', label='Has LoS (Class 1)', alpha=0.8, s=15)
+    
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel("t-SNE Dimension 1", fontsize=12)
+    ax.set_ylabel("t-SNE Dimension 2", fontsize=12)
+    ax.legend()
+    ax.grid(True, linestyle='--', alpha=0.6)
+    
+    return fig, ax
 
 def main():
     output_dir = 'paper_figures'
     os.makedirs(output_dir, exist_ok=True)
     
+    # Chỉ cần một ít dữ liệu để trực quan hóa
     constellations = ['iridium'] 
-    X_vec, y_vec = prepare_combined_data(constellations, 'vector', sequence_length=1, prediction_horizon=1)
-    X_ga, y_ga = prepare_combined_data(constellations, 'ga', sequence_length=1, prediction_horizon=1)
+    horizon_steps = 5
+    seq_len = 5
     
-    # Chạy t-SNE MỘT LẦN cho mỗi bộ dữ liệu
-    tsne_coords_vec, y_sample_vec = create_tsne_data(X_vec, y_vec)
-    tsne_coords_ga, y_sample_ga = create_tsne_data(X_ga, y_ga)
+    # Chuẩn bị 2 bộ dữ liệu (chỉ cần lấy 1 snapshot, không cần chuỗi)
+    # Chúng ta sẽ tạm thời sửa sequence_length=1 để lấy snapshot
+    X_vec, y_vec = prepare_combined_data(constellations, 'vector', sequence_length=1, prediction_horizon=horizon_steps)
+    X_ga, y_ga = prepare_combined_data(constellations, 'ga', sequence_length=1, prediction_horizon=horizon_steps)
     
-    print("\n--- Đang tạo biểu đồ so sánh cuối cùng ---")
-    plt.style.use('seaborn-v0_8-whitegrid')
-    fig_combined, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 9))
-    
-    colors = {0: 'cornflowerblue', 1: 'salmon'}
-    sizes = {0: 15, 1: 25}
-    alphas = {0: 0.6, 1: 0.8}
-    
-    # --- TỐI ƯU HÓA: Vẽ lại từ dữ liệu đã có ---
-    # --- Panel (a): Traditional Vector Features ---
-    y_flat_vec = y_sample_vec.flatten()
-    ax1.scatter(tsne_coords_vec[y_flat_vec == 0, 0], tsne_coords_vec[y_flat_vec == 0, 1], 
-                c=colors[0], label='No LoS (Class 0)', alpha=alphas[0], s=sizes[0], edgecolors='k', linewidths=0.2)
-    ax1.scatter(tsne_coords_vec[y_flat_vec == 1, 0], tsne_coords_vec[y_flat_vec == 1, 1], 
-                c=colors[1], label='Has LoS (Class 1)', alpha=alphas[1], s=sizes[1], edgecolors='k', linewidths=0.2)
-    ax1.set_title("(a) Traditional Vector Features", fontsize=20, pad=15, weight='bold')
-    ax1.set_xlabel("t-SNE Dimension 1", fontsize=16); ax1.set_ylabel("t-SNE Dimension 2", fontsize=16)
-    ax1.tick_params(axis='both', which='major', labelsize=12)
-    ax1.legend(fontsize=14)
+    # Tạo 2 biểu đồ t-SNE
+    fig_vec, _ = generate_tsne(X_vec, y_vec, "Feature Space (Traditional Vectors)")
+    fig_ga, _ = generate_tsne(X_ga, y_ga, "Feature Space (Geometric Algebra)")
 
-    # --- Panel (b): Geometric Algebra Features ---
-    y_flat_ga = y_sample_ga.flatten()
-    ax2.scatter(tsne_coords_ga[y_flat_ga == 0, 0], tsne_coords_ga[y_flat_ga == 0, 1], 
-                c=colors[0], label='No LoS (Class 0)', alpha=alphas[0], s=sizes[0], edgecolors='k', linewidths=0.2)
-    ax2.scatter(tsne_coords_ga[y_flat_ga == 1, 0], tsne_coords_ga[y_flat_ga == 1, 1], 
-                c=colors[1], label='Has LoS (Class 1)', alpha=alphas[1], s=sizes[1], edgecolors='k', linewidths=0.2)
-    ax2.set_title("(b) Geometric Algebra Features", fontsize=20, pad=15, weight='bold')
-    ax2.set_xlabel("t-SNE Dimension 1", fontsize=16); ax2.set_ylabel("t-SNE Dimension 2", fontsize=16)
-    ax2.tick_params(axis='both', which='major', labelsize=12)
-    ax2.legend(fontsize=14)
+    # Ghép 2 biểu đồ lại thành một Figure duy nhất
+    fig_combined, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 8))
     
-    fig_combined.suptitle("t-SNE Visualization of Feature Spaces for LoS Classification", fontsize=24, weight='bold')
+    # Lấy lại các điểm đã tính
+    # (Để cho đơn giản, chúng ta sẽ chạy lại TSNE ở đây, trong code thực tế có thể tối ưu hơn)
+    print("\n--- Tạo lại biểu đồ để ghép ---")
+    # ... chạy lại TSNE cho Vector ...
+    n_samples = 5000
+    indices_vec = random.sample(range(len(X_vec)), n_samples)
+    X_vec_sample = X_vec[indices_vec].reshape(n_samples, -1)
+    y_vec_sample = y_vec[indices_vec]
+    X_vec_scaled = StandardScaler().fit_transform(X_vec_sample)
+    tsne_vec = TSNE(n_components=2, perplexity=30, n_iter=1000, random_state=42).fit_transform(X_vec_scaled)
+    
+    # ... chạy lại TSNE cho GA ...
+    indices_ga = random.sample(range(len(X_ga)), n_samples)
+    X_ga_sample = X_ga[indices_ga].reshape(n_samples, -1)
+    y_ga_sample = y_ga[indices_ga]
+    X_ga_scaled = StandardScaler().fit_transform(X_ga_sample)
+    tsne_ga = TSNE(n_components=2, perplexity=30, n_iter=1000, random_state=42).fit_transform(X_ga_scaled)
+    
+    # Vẽ vào subplot 1
+    ax1.scatter(tsne_vec[y_vec_sample.flatten() == 0, 0], tsne_vec[y_vec_sample.flatten() == 0, 1], c='cornflowerblue', label='No LoS', alpha=0.6, s=10)
+    ax1.scatter(tsne_vec[y_vec_sample.flatten() == 1, 0], tsne_vec[y_vec_sample.flatten() == 1, 1], c='salmon', label='Has LoS', alpha=0.8, s=15)
+    ax1.set_title("(a) Traditional Vector Features", fontsize=18, pad=15)
+    ax1.set_xlabel("t-SNE Dimension 1", fontsize=14); ax1.set_ylabel("t-SNE Dimension 2", fontsize=14)
+    ax1.legend()
+
+    # Vẽ vào subplot 2
+    ax2.scatter(tsne_ga[y_ga_sample.flatten() == 0, 0], tsne_ga[y_ga_sample.flatten() == 0, 1], c='cornflowerblue', label='No LoS', alpha=0.6, s=10)
+    ax2.scatter(tsne_ga[y_ga_sample.flatten() == 1, 0], tsne_ga[y_ga_sample.flatten() == 1, 1], c='salmon', label='Has LoS', alpha=0.8, s=15)
+    ax2.set_title("(b) Geometric Algebra Features", fontsize=18, pad=15)
+    ax2.set_xlabel("t-SNE Dimension 1", fontsize=14); ax2.set_ylabel("t-SNE Dimension 2", fontsize=14)
+    ax2.legend()
+    
+    fig_combined.suptitle("t-SNE Visualization of Feature Spaces for LoS Classification", fontsize=22)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     
-    fig_filename = os.path.join(output_dir, 'fig_tsne_feature_space.png')
-    plt.savefig(fig_filename, dpi=600, bbox_inches='tight')
-    
-    print(f"\nSaved combined Figure 3 to '{fig_filename}'")
+    fig4_filename = os.path.join(output_dir, 'fig_tsne_feature_space.png')
+    plt.savefig(fig4_filename, dpi=600)
+    print(f"\nSaved combined Figure 4 to '{fig4_filename}'")
 
 if __name__ == "__main__":
     main()
