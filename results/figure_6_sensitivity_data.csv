@@ -1,0 +1,17 @@
+Horizon (minutes),Model,Features,F1_Score
+1,MLP,Vector,0.9732
+1,LSTM,Vector,0.9795
+1,LSTM,GA,0.9795
+1,LSTM,Hybrid,0.9790
+5,MLP,Vector,0.9784
+5,LSTM,Vector,0.9780
+5,LSTM,GA,0.9777
+5,LSTM,Hybrid,0.9772
+10,MLP,Vector,0.9774
+10,LSTM,Vector,0.9725
+10,LSTM,GA,0.9788
+10,LSTM,Hybrid,0.9793
+15,MLP,Vector,0.9759
+15,LSTM,Vector,0.9752
+15,LSTM,GA,0.9827
+15,LSTM,Hybrid,0.9760

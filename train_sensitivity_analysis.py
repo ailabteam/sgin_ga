@@ -1,25 +1,31 @@
-# train_sensitivity_analysis.py
-# v1.1: Sử dụng các hàm từ utils.py
+# train_sensitivity_analysis.py (v2.0 - Data Export Only)
+# Mục đích: Chạy thực nghiệm phân tích độ nhạy và lưu kết quả ra file CSV.
 
 import numpy as np
-import torch
-from sklearn.model_selection import train_test_split
 import pandas as pd
-import matplotlib.pyplot as plt
 import os
-import time
+from sklearn.model_selection import train_test_split
 
-# SỬA LỖI: Import mọi thứ từ utils.py
-from utils import MLP_Predictor, LSTM_Predictor, prepare_combined_data, train_and_evaluate_convergence
+# Import các công cụ từ utils.py
+from utils import (
+    MLP_Predictor,
+    LSTM_Predictor,
+    prepare_combined_data,
+    train_and_evaluate_convergence,
+    set_seed
+)
 
 def main():
-    output_dir = 'paper_figures'
+    set_seed(42)
+    output_dir = 'results'
     os.makedirs(output_dir, exist_ok=True)
-    
+
+    # --- Thiết lập ---
     constellations = ['iridium', 'starlink', 'oneweb']
     seq_len = 5
-    NUM_EPOCHS = 15
+    NUM_EPOCHS = 15 # Dùng 15 epochs để chạy nhanh hơn
     
+    # Các prediction horizon để thử nghiệm
     horizons_in_steps = [1, 5, 10, 15]
     
     models_to_test = {
@@ -29,23 +35,24 @@ def main():
         "LSTM (Hybrid)": {"model_class": LSTM_Predictor, "feature_type": "hybrid"},
     }
     
-    print("--- Bắt đầu chuẩn bị dữ liệu cho tất cả các horizons ---")
+    # --- Chuẩn bị Dữ liệu ---
+    print("--- Pre-loading all datasets for all horizons ---")
     all_datasets = {}
-    for horizon in horizons_in_steps:
-        print(f"\n--- Horizon = {horizon*60}s ({horizon} steps) ---")
-        all_datasets[horizon] = {
-            'vector': prepare_combined_data(constellations, 'vector', seq_len, horizon),
-            'ga': prepare_combined_data(constellations, 'ga', seq_len, horizon),
-            'hybrid': prepare_combined_data(constellations, 'hybrid', seq_len, horizon),
-        }
+    feature_types = ['vector', 'ga', 'hybrid']
+    for ft in feature_types:
+        for horizon in horizons_in_steps:
+             X, y = prepare_combined_data(constellations, ft, seq_len, horizon)
+             all_datasets[(ft, horizon)] = (X, y)
 
-    sensitivity_results = {name: [] for name in models_to_test.keys()}
+    # --- Chạy Thực nghiệm ---
+    sensitivity_results = []
     
     for horizon in horizons_in_steps:
-        print(f"\n\n===== BẮT ĐẦU THỰC NGHIỆM VỚI HORIZON = {horizon*60}s =====\n")
+        print(f"\n\n===== RUNNING SENSITIVITY @ HORIZON = {horizon*60}s =====\n")
         for model_name, config in models_to_test.items():
             feature_type = config['feature_type']
-            X, y = all_datasets[horizon][feature_type]
+            
+            X, y = all_datasets[(feature_type, horizon)]
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
             
             feat_dim = X.shape[2]
@@ -55,30 +62,23 @@ def main():
                 model = LSTM_Predictor(input_size=feat_dim)
             
             res = train_and_evaluate_convergence(model, X_train, y_train, X_test, y_test, f"{model_name} @ H={horizon}", NUM_EPOCHS)
-            sensitivity_results[model_name].append(res['F1 Score'])
+            model_id, feature_id = model_name.replace(')', '').split(' (')
+            
+            sensitivity_results.append({
+                'Horizon (minutes)': horizon,
+                'Model': model_id,
+                'Features': feature_id,
+                'F1_Score': res['F1 Score']
+            })
 
-    print("\n--- Generating Figure 6: Sensitivity Analysis on Prediction Horizon ---")
-    horizons_in_minutes = [h * 60 / 60 for h in horizons_in_steps]
+    # --- Lưu Kết quả ---
+    print("\n--- Saving Sensitivity Analysis Results ---")
+    df_sensitivity = pd.DataFrame(sensitivity_results)
+    sensitivity_path = os.path.join(output_dir, 'figure_6_sensitivity_data.csv')
+    df_sensitivity.to_csv(sensitivity_path, index=False, float_format='%.4f')
     
-    plt.style.use('seaborn-v0_8-whitegrid')
-    fig, ax = plt.subplots(figsize=(12, 8))
-    
-    markers = ['o', 's', '^', 'D']
-    for i, (name, f1_scores) in enumerate(sensitivity_results.items()):
-        ax.plot(horizons_in_minutes, f1_scores, marker=markers[i], linestyle='--', markersize=8, label=name)
-
-    ax.set_title('Model Performance Sensitivity to Prediction Horizon', fontsize=18, pad=20, weight='bold')
-    ax.set_xlabel('Prediction Horizon (minutes)', fontsize=14)
-    ax.set_ylabel('F1 Score on Test Set', fontsize=14)
-    ax.set_xticks(horizons_in_minutes)
-    ax.tick_params(axis='both', labelsize=12)
-    ax.legend(fontsize=12)
-    ax.grid(True, which='both', linestyle='--')
-    
-    plt.tight_layout()
-    fig_filename = os.path.join(output_dir, 'fig_sensitivity_analysis.png')
-    plt.savefig(fig_filename, dpi=600)
-    print(f"Saved Figure 6 to '{fig_filename}'")
+    print(f"Saved sensitivity analysis data (for Figure 6) to '{sensitivity_path}'")
+    print(df_sensitivity.to_string(index=False))
 
 if __name__ == '__main__':
     main()

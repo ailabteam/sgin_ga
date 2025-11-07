@@ -1,0 +1,5 @@
+Feature_Set,F1_Score
+Bivector Only,0.3246
+Relative Vec. Only,0.9639
+GA (Full),0.9755
+Hybrid (Full),0.9799
